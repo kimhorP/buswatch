@@ -1,0 +1,16 @@
+[Unit]
+Description=BusWatch Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=buswatch
+WorkingDirectory=/opt/buswatch
+EnvironmentFile=/opt/buswatch/.env
+ExecStart=/opt/buswatch/.venv/bin/python -m buswatch
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
