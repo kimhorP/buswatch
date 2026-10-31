@@ -81,9 +81,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             f"Hello {name}, how can I help you with seat availability?\n\n"
             "Here are the available commands:\n"
-            "/watch: set a direction + date to watch (alerts at ≤7 seats)\n"
+            f"/watch [dd-mm-yy]: watch a date for low seats (alerts at ≤{THRESHOLD} seats)\n"
             "/unwatch: stop receiving alerts\n"
-            "/check: instant seat availability lookup"
+            f"/check [dd-mm-yy]: instant seat availability lookup\n\n"
+            f"Date format: {_DATE_HINT}\n"
+            "Omit the date and I'll ask for it."
         )
 
 
