@@ -72,10 +72,16 @@ def _company_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _help_text(name: str) -> str:
+def _greeting(name: str) -> str:
     return (
-        f"Hello {name}, how can I help you with seat availability?\n\n"
-        "Here are the available commands:\n"
+        f"Hello {name}, how can I help you with seat availability?\n"
+        "Send /info to see available commands."
+    )
+
+
+def _info_text() -> str:
+    return (
+        "Available commands:\n"
         f"/watch [dd-mm-yy]: watch a date for low seats (alerts at ≤{THRESHOLD} seats)\n"
         "/unwatch: stop receiving alerts\n"
         f"/check [dd-mm-yy]: instant seat availability lookup\n\n"
@@ -90,7 +96,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         name = "there"
         if update.effective_user and update.effective_user.first_name:
             name = update.effective_user.first_name
-        await update.message.reply_text(_help_text(name))
+        await update.message.reply_text(_greeting(name))
+
+
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message:
+        await _track_user(update, context)
+        await update.message.reply_text(_info_text())
 
 
 async def _track_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -158,7 +170,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         name = "there"
         if update.effective_user and update.effective_user.first_name:
             name = update.effective_user.first_name
-        await update.message.reply_text(_help_text(name))
+        await update.message.reply_text(_greeting(name))
         return
 
     d = _parse_user_date(update.message.text)
@@ -335,6 +347,7 @@ def build_application() -> tuple[Application, Database]:
     app.bot_data["settings"] = settings
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("info", cmd_info))
     app.add_handler(CommandHandler("watch", cmd_watch))
     app.add_handler(CommandHandler("check", cmd_check))
     app.add_handler(CommandHandler("unwatch", cmd_unwatch))
@@ -374,6 +387,7 @@ async def run() -> None:
                 await app.bot.set_my_commands(
                     [
                         ("start", "Introduce the bot"),
+                        ("info", "Show available commands"),
                         ("watch", "Watch a date for low seats"),
                         ("unwatch", "Stop receiving alerts"),
                         ("check", "Check seats for a date"),
