@@ -1,0 +1,42 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run ruff check
+      - run: uv run ty check
+      - run: uv run pytest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          fingerprint: ${{ secrets.SSH_FINGERPRINT }}
+          script: |
+            export PATH="$HOME/.local/bin:$PATH"
+            cd /root/buswatch
+            git pull --ff-only
+            uv sync --quiet
+            systemctl restart buswatch
+            sleep 3
+            systemctl is-active buswatch
