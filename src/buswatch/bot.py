@@ -72,21 +72,25 @@ def _company_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _help_text(name: str) -> str:
+    return (
+        f"Hello {name}, how can I help you with seat availability?\n\n"
+        "Here are the available commands:\n"
+        f"/watch [dd-mm-yy]: watch a date for low seats (alerts at ≤{THRESHOLD} seats)\n"
+        "/unwatch: stop receiving alerts\n"
+        f"/check [dd-mm-yy]: instant seat availability lookup\n\n"
+        f"Date format: {_DATE_HINT}\n"
+        "Omit the date and I'll ask for it."
+    )
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
         await _track_user(update, context)
         name = "there"
         if update.effective_user and update.effective_user.first_name:
             name = update.effective_user.first_name
-        await update.message.reply_text(
-            f"Hello {name}, how can I help you with seat availability?\n\n"
-            "Here are the available commands:\n"
-            f"/watch [dd-mm-yy]: watch a date for low seats (alerts at ≤{THRESHOLD} seats)\n"
-            "/unwatch: stop receiving alerts\n"
-            f"/check [dd-mm-yy]: instant seat availability lookup\n\n"
-            f"Date format: {_DATE_HINT}\n"
-            "Omit the date and I'll ask for it."
-        )
+        await update.message.reply_text(_help_text(name))
 
 
 async def _track_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -150,6 +154,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     flow = _date_wait.get(chat_id)
     if flow is None:
+        await _track_user(update, context)
+        name = "there"
+        if update.effective_user and update.effective_user.first_name:
+            name = update.effective_user.first_name
+        await update.message.reply_text(_help_text(name))
         return
 
     d = _parse_user_date(update.message.text)
