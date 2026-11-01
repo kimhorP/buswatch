@@ -12,6 +12,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
     chat_id       INTEGER PRIMARY KEY,
     direction     TEXT NOT NULL,
+    company       TEXT,
     watch_date    TEXT,
     updated_at    TEXT NOT NULL
 );
@@ -64,8 +65,9 @@ class Database:
         # migrate pre-watch_date databases
         async with self.conn.execute("PRAGMA table_info(settings)") as cur:
             cols = {row["name"] for row in await cur.fetchall()}
-        if "watch_date" not in cols:
-            await self.conn.execute("ALTER TABLE settings ADD COLUMN watch_date TEXT")
+        for col in ("watch_date", "company"):
+            if col not in cols:
+                await self.conn.execute(f"ALTER TABLE settings ADD COLUMN {col} TEXT")
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -89,19 +91,25 @@ class Database:
         return Direction(row["direction"]) if row else None
 
     async def set_direction(
-        self, chat_id: int, direction: Direction, watch_date: str | None = None
+        self,
+        chat_id: int,
+        direction: Direction,
+        watch_date: str | None = None,
+        company: str | None = None,
     ) -> None:
-        """Upsert a user's watch. watch_date is ISO (YYYY-MM-DD) or None (today+tomorrow)."""
+        """Upsert a user's watch. watch_date is ISO (YYYY-MM-DD) or None (today+tomorrow).
+        company is None to watch all companies, else a company name."""
         await self.conn.execute(
             """
-            INSERT INTO settings (chat_id, direction, watch_date, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO settings (chat_id, direction, company, watch_date, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE
                 SET direction = excluded.direction,
+                    company = excluded.company,
                     watch_date = excluded.watch_date,
                     updated_at = excluded.updated_at
             """,
-            (chat_id, direction.value, watch_date, _now_iso()),
+            (chat_id, direction.value, company, watch_date, _now_iso()),
         )
         await self.conn.commit()
 
@@ -131,7 +139,7 @@ class Database:
         async with self.conn.execute(
             """
             SELECT u.chat_id, u.name, u.username, u.first_seen,
-                   s.direction, s.watch_date, s.updated_at
+                   s.direction, s.company, s.watch_date, s.updated_at
             FROM users u
             LEFT JOIN settings s ON s.chat_id = u.chat_id
             ORDER BY u.first_seen
@@ -140,11 +148,16 @@ class Database:
             rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
-    async def get_all_watchers(self) -> list[tuple[int, Direction, str | None]]:
-        """All (chat_id, direction, watch_date) rows that have opted in to watching."""
-        async with self.conn.execute("SELECT chat_id, direction, watch_date FROM settings") as cur:
+    async def get_all_watchers(self) -> list[tuple[int, Direction, str | None, str | None]]:
+        """All (chat_id, direction, watch_date, company) rows that have opted in to watching."""
+        async with self.conn.execute(
+            "SELECT chat_id, direction, watch_date, company FROM settings"
+        ) as cur:
             rows = await cur.fetchall()
-        return [(row["chat_id"], Direction(row["direction"]), row["watch_date"]) for row in rows]
+        return [
+            (row["chat_id"], Direction(row["direction"]), row["watch_date"], row["company"])
+            for row in rows
+        ]
 
     # --- seat history ---
 

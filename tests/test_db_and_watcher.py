@@ -65,19 +65,33 @@ async def test_delete_direction(db: Database):
 async def test_get_all_watchers(db: Database):
     await db.set_direction(CHAT_A, Direction.PP_SR)
     await db.set_direction(CHAT_B, Direction.SR_PP, "2026-10-26")
-    watchers = {cid: (d, w) for cid, d, w in await db.get_all_watchers()}
+    watchers = {cid: (d, w, company) for cid, d, w, company in await db.get_all_watchers()}
     assert watchers == {
-        CHAT_A: (Direction.PP_SR, None),
-        CHAT_B: (Direction.SR_PP, "2026-10-26"),
+        CHAT_A: (Direction.PP_SR, None, None),
+        CHAT_B: (Direction.SR_PP, "2026-10-26", None),
     }
 
 
 async def test_watch_date_upsert(db: Database):
     # set with date, then re-set without date clears it
     await db.set_direction(CHAT_A, Direction.PP_SR, "2026-10-26")
-    assert await db.get_all_watchers() == [(CHAT_A, Direction.PP_SR, "2026-10-26")]
+    assert await db.get_all_watchers() == [(CHAT_A, Direction.PP_SR, "2026-10-26", None)]
     await db.set_direction(CHAT_A, Direction.SR_PP)
-    assert await db.get_all_watchers() == [(CHAT_A, Direction.SR_PP, None)]
+    assert await db.get_all_watchers() == [(CHAT_A, Direction.SR_PP, None, None)]
+
+
+async def test_watch_company_filter(db: Database):
+    # company=None means all companies
+    await db.set_direction(CHAT_A, Direction.PP_SR, company=None)
+    assert await db.get_all_watchers() == [(CHAT_A, Direction.PP_SR, None, None)]
+    # company set persists
+    await db.set_direction(CHAT_A, Direction.PP_SR, "2026-10-26", company="Larryta")
+    assert await db.get_all_watchers() == [
+        (CHAT_A, Direction.PP_SR, "2026-10-26", "Larryta")
+    ]
+    # switching company to None clears it
+    await db.set_direction(CHAT_A, Direction.PP_SR, company=None)
+    assert await db.get_all_watchers() == [(CHAT_A, Direction.PP_SR, None, None)]
 
 
 async def test_users_upsert_and_list(db: Database):

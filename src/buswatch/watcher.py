@@ -1,4 +1,4 @@
-"""Background watcher: polls sources at fixed times, detects threshold transitions."""
+"""Background watcher: polls sources hourly, detects threshold transitions."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 import httpx
 
-from buswatch.config import POLL_TIMES, THRESHOLD, TZ
+from buswatch.config import POLL_INTERVAL, THRESHOLD, TZ
 from buswatch.db import Database
 from buswatch.models import Direction, NormalizedTrip
 from buswatch.sources import ALL_SOURCES
@@ -18,24 +18,19 @@ log = logging.getLogger("buswatch.watcher")
 
 
 def _next_poll_time(now: datetime) -> datetime:
-    """Next scheduled poll datetime after `now`, in Asia/Phnom_Penh."""
+    """Next hourly poll datetime after `now`, in Asia/Phnom_Penh."""
     local = now.astimezone(TZ)
-    today_slots = [
-        local.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0) for t in POLL_TIMES
-    ]
-    for slot in today_slots:
-        if slot > local:
-            return slot
-    # else: first slot tomorrow
-    tomorrow = local + timedelta(days=1)
-    first = POLL_TIMES[0]
-    return tomorrow.replace(hour=first.hour, minute=first.minute, second=0, microsecond=0)
+    return local.replace(minute=0, second=0, microsecond=0) + POLL_INTERVAL
 
 
-async def _fetch_day(direction: Direction, day, http: httpx.AsyncClient) -> list[NormalizedTrip]:
-    """Fetch every source for one day, one direction."""
+async def _fetch_day(
+    direction: Direction, day, http: httpx.AsyncClient, company: str | None = None
+) -> list[NormalizedTrip]:
+    """Fetch sources for one day, one direction; optional company filter."""
     trips: list[NormalizedTrip] = []
     for source in ALL_SOURCES:
+        if company is not None and source.company != company:
+            continue
         try:
             trips.extend(await source.fetch(http, day, direction))
         except (SourceError, httpx.HTTPError) as exc:
@@ -71,24 +66,26 @@ async def poll_once(db: Database, http: httpx.AsyncClient) -> dict[int, list[Nor
 
     # Resolve each user's days: their watch_date, or today+tomorrow if unset.
     today = datetime.now(TZ).date()
-    user_days: dict[int, tuple[Direction, list[date]]] = {}
-    for chat_id, direction, watch_date in watchers:
+    user_days: dict[int, tuple[Direction, list[date], str | None]] = {}
+    for chat_id, direction, watch_date, company in watchers:
         if watch_date:
             days = [date.fromisoformat(watch_date)]
         else:
             days = [today, today + timedelta(days=1)]
-        user_days[chat_id] = (direction, days)
+        user_days[chat_id] = (direction, days, company)
 
-    # Fetch once per distinct (direction, day), shared across users.
-    needed = {(direction, day) for direction, days in user_days.values() for day in days}
-    fetched: dict[tuple[Direction, date], list[NormalizedTrip]] = {}
-    for direction, day in needed:
-        fetched[(direction, day)] = await _fetch_day(direction, day, http)
+    # Fetch once per distinct (direction, day, company), shared across users.
+    needed = {
+        (direction, day, company) for direction, days, company in user_days.values() for day in days
+    }
+    fetched: dict[tuple[Direction, date, str | None], list[NormalizedTrip]] = {}
+    for direction, day, company in needed:
+        fetched[(direction, day, company)] = await _fetch_day(direction, day, http, company)
 
     # Evaluate + record history per user, against that user's own history.
     alerts: dict[int, list[NormalizedTrip]] = {}
-    for chat_id, (direction, days) in user_days.items():
-        trips = [t for day in days for t in fetched.get((direction, day), [])]
+    for chat_id, (direction, days, company) in user_days.items():
+        trips = [t for day in days for t in fetched.get((direction, day, company), [])]
         low = await _low_trips_for_user(db, chat_id, trips)
         if low:
             alerts[chat_id] = low

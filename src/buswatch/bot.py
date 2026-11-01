@@ -17,7 +17,7 @@ from telegram.ext import (
     filters,
 )
 
-from buswatch.config import POLL_TIMES, THRESHOLD, load_settings
+from buswatch.config import POLL_INTERVAL, THRESHOLD, load_settings
 from buswatch.db import Database
 from buswatch.models import Direction, NormalizedTrip, classify_vehicle
 from buswatch.sources import ALL_SOURCES
@@ -72,6 +72,19 @@ def _company_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _watch_company_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("CamboLink21", callback_data="co:CamboLink21"),
+                InlineKeyboardButton("Saly VIP", callback_data="co:SalyVIP"),
+            ],
+            [InlineKeyboardButton("Larryta", callback_data="co:Larryta")],
+            [InlineKeyboardButton("All companies", callback_data="co:all")],
+        ]
+    )
+
+
 def _greeting(name: str) -> str:
     return (
         f"Hello {name}, how can I help you with seat availability?\n"
@@ -82,7 +95,8 @@ def _greeting(name: str) -> str:
 def _info_text() -> str:
     return (
         "Available commands:\n"
-        f"/watch [dd-mm-yy]: watch a date for low seats (alerts at ≤{THRESHOLD} seats)\n"
+        f"/watch [dd-mm-yy]: watch a date + direction + company for low seats "
+        f"(alerts at ≤{THRESHOLD} seats)\n"
         "/unwatch: stop receiving alerts\n"
         f"/check [dd-mm-yy]: instant seat availability lookup\n\n"
         f"Date format: {_DATE_HINT}\n"
@@ -125,7 +139,7 @@ async def cmd_watch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     f"Couldn't read that date. Please use format {_DATE_HINT}."
                 )
                 return
-            _watch_state[chat_id] = {"date": d}
+            _watch_state[chat_id] = {"date": d, "direction": None}
             _date_wait.pop(chat_id, None)
             await update.message.reply_text(
                 "Which direction do you want to watch?", reply_markup=_direction_keyboard()
@@ -180,7 +194,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     _date_wait.pop(chat_id, None)
     if flow == "watch":
-        _watch_state[chat_id] = {"date": d}
+        _watch_state[chat_id] = {"date": d, "direction": None}
         await update.message.reply_text(
             "Which direction do you want to watch?", reply_markup=_direction_keyboard()
         )
@@ -228,16 +242,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=_company_keyboard(),
             )
         elif wstate is not None and "date" in wstate:
-            # part of a /watch flow — open to any chat (multi-user)
-            db: Database = context.bot_data["db"]
-            day = wstate["date"]
-            await db.set_direction(chat_id, direction, day.isoformat())
-            _watch_state.pop(chat_id, None)
-            times = ", ".join(f"{t.hour:02d}:{t.minute:02d}" for t in POLL_TIMES)
+            # part of a /watch flow — ask which company to watch
+            wstate["direction"] = direction
             await query.edit_message_text(
-                f"✅ Watching <b>{direction.label}</b> on {_format_user_date(day)}.\n"
-                f"Alerts at ≤{THRESHOLD} seats, polled daily at {times} (Phnom Penh time).",
-                parse_mode="HTML",
+                f"{_format_user_date(wstate['date'])} · {direction.label}\n\nWhich company?",
+                reply_markup=_watch_company_keyboard(),
             )
         else:
             await query.edit_message_text("Expired — run /watch or /check again.")
@@ -245,49 +254,76 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data.startswith("co:"):
         company = data.split(":", 1)[1]
-        state = _check_state.setdefault(chat_id, {})
-        state["company"] = company
+        company_name = None if company == "all" else company
 
-        direction = state.get("direction")
-        day = state.get("date")
-        if direction is None or day is None:
-            await query.edit_message_text("Expired — run /check again.")
-            _check_state.pop(chat_id, None)
+        state = _check_state.get(chat_id)
+        wstate = _watch_state.get(chat_id)
+        if state is not None and "date" in state and state.get("direction") is not None:
+            # part of a /check flow
+            state["company"] = company_name
+            direction = state["direction"]
+            day = state["date"]
+
+            await query.edit_message_text(
+                f"Fetching {company_name or 'all companies'} {direction.label} "
+                f"on {_format_user_date(day)} …"
+            )
+
+            try:
+                async with httpx.AsyncClient(timeout=30) as http:
+                    if company_name is not None:
+                        source = next(s for s in ALL_SOURCES if s.company == company_name)
+                        trips = await source.fetch(http, day, direction)
+                    else:
+                        from buswatch.watcher import _fetch_day
+
+                        trips = await _fetch_day(direction, day, http)
+            except (SourceError, httpx.HTTPError) as exc:
+                log.warning("Check fetch failed: %s", exc)
+                msg = f"Fetch failed for {company_name or 'all'}. Try again."
+                await query.edit_message_text(msg)
+                _check_state.pop(chat_id, None)
+                return
+
+            if not trips:
+                await query.edit_message_text("No trips found.")
+                _check_state.pop(chat_id, None)
+                return
+
+            # group by vehicle class
+            groups: dict[str, list[NormalizedTrip]] = {}
+            for t in trips:
+                groups.setdefault(classify_vehicle(t.vehicle), []).append(t)
+
+            state["trips"] = trips
+            buttons = [
+                [InlineKeyboardButton(f"{g} ({len(ts)})", callback_data=f"veh:{g}")]
+                for g, ts in sorted(groups.items())
+            ]
+            state["groups"] = groups
+            await query.edit_message_text(
+                "Pick a vehicle type:", reply_markup=InlineKeyboardMarkup(buttons)
+            )
             return
-
-        await query.edit_message_text(
-            f"Fetching {company} {direction.label} on {_format_user_date(day)} …"
-        )
-
-        source = next(s for s in ALL_SOURCES if s.company == company)
-        try:
-            async with httpx.AsyncClient(timeout=30) as http:
-                trips = await source.fetch(http, day, direction)
-        except (SourceError, httpx.HTTPError) as exc:
-            log.warning("Check fetch failed: %s", exc)
-            await query.edit_message_text(f"Fetch failed for {company}. Try again.")
-            _check_state.pop(chat_id, None)
+        elif wstate is not None and "date" in wstate and wstate.get("direction") is not None:
+            # part of a /watch flow — save and confirm
+            db: Database = context.bot_data["db"]
+            day = wstate["date"]
+            direction = wstate["direction"]
+            await db.set_direction(chat_id, direction, day.isoformat(), company_name)
+            _watch_state.pop(chat_id, None)
+            interval_hours = int(POLL_INTERVAL.total_seconds() // 3600)
+            watch_company = f"{company_name or 'all companies'} "
+            await query.edit_message_text(
+                f"✅ Watching <b>{watch_company}{direction.label}</b> "
+                f"on {_format_user_date(day)}.\n"
+                f"Alerts at ≤{THRESHOLD} seats, polled every {interval_hours}h "
+                "(Phnom Penh time).",
+                parse_mode="HTML",
+            )
             return
-
-        if not trips:
-            await query.edit_message_text("No trips found.")
-            _check_state.pop(chat_id, None)
-            return
-
-        # group by vehicle class
-        groups: dict[str, list[NormalizedTrip]] = {}
-        for t in trips:
-            groups.setdefault(classify_vehicle(t.vehicle), []).append(t)
-
-        state["trips"] = trips
-        buttons = [
-            [InlineKeyboardButton(f"{g} ({len(ts)})", callback_data=f"veh:{g}")]
-            for g, ts in sorted(groups.items())
-        ]
-        state["groups"] = groups
-        await query.edit_message_text(
-            "Pick a vehicle type:", reply_markup=InlineKeyboardMarkup(buttons)
-        )
+        else:
+            await query.edit_message_text("Expired — run /watch or /check again.")
         return
 
     if data.startswith("veh:"):

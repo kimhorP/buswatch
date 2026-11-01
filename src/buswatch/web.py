@@ -34,10 +34,10 @@ _PAGE = """<!doctype html>
 <body>
 <h1>BusWatch users ({count})</h1>
 <table>
-<tr>
-<th>#</th><th>Name</th><th>Username</th><th>Chat ID</th>
-<th>Direction</th><th>Watch date</th><th>First seen</th>
-</tr>
+ <tr>
+ <th>#</th><th>Name</th><th>Username</th><th>Chat ID</th>
+ <th>Direction</th><th>Company</th><th>Watch date</th><th>First seen</th>
+ </tr>
 {rows}
 </table>
 </body>
@@ -66,6 +66,7 @@ def render_users_page(users: list[dict]) -> str:
             f"<td>{_esc(u.get('username'))}</td>"
             f"<td>{u['chat_id']}</td>"
             f"<td>{_esc(direction)}</td>"
+            f"<td>{_esc(u.get('company') or 'all')}</td>"
             f"<td>{_esc(u.get('watch_date'))}</td>"
             f"<td>{_esc(u.get('first_seen'))}</td>"
             "</tr>"
