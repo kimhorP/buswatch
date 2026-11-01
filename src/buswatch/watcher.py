@@ -126,7 +126,7 @@ async def watcher_loop(db: Database, send_alert) -> None:
             try:
                 # direction per user, for message formatting
                 watchers = await db.get_all_watchers()
-                dir_by_chat = {chat_id: direction for chat_id, direction, _ in watchers}
+                dir_by_chat = {chat_id: direction for chat_id, direction, _, _ in watchers}
 
                 alerts = await poll_once(db, http)
                 total = sum(len(v) for v in alerts.values())
