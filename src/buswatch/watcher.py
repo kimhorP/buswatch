@@ -10,7 +10,7 @@ import httpx
 
 from buswatch.config import POLL_INTERVAL, THRESHOLD, TZ
 from buswatch.db import Database
-from buswatch.models import Direction, NormalizedTrip
+from buswatch.models import Direction, NormalizedTrip, classify_vehicle
 from buswatch.sources import ALL_SOURCES
 from buswatch.sources.base import SourceError
 
@@ -92,9 +92,20 @@ async def poll_once(db: Database, http: httpx.AsyncClient) -> dict[int, list[Nor
     return alerts
 
 
+def _bus_type(trip: NormalizedTrip) -> str:
+    return classify_vehicle(trip.vehicle)
+
+
+def pretty_date(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso[:10]).strftime("%d %b %Y")
+    except ValueError:
+        return iso
+
+
 def format_alert(trips: list[NormalizedTrip], direction: Direction) -> str:
     """One consolidated message per poll cycle."""
-    lines = [f"🪑 Low seats — {direction.label} ({datetime.now(TZ):%d %b})\n"]
+    lines = [f"🪑 Low seats — {direction.label}\n"]
     by_company: dict[str, list[NormalizedTrip]] = {}
     for t in sorted(trips, key=lambda t: (t.company, t.depart_time)):
         by_company.setdefault(t.company, []).append(t)
@@ -104,7 +115,12 @@ def format_alert(trips: list[NormalizedTrip], direction: Direction) -> str:
         for t in company_trips:
             seats = "sold out" if t.seats_available == 0 else f"{t.seats_available} left"
             price = f"{t.price:g} {t.currency}"
-            lines.append(f"  {t.depart_time} → {t.arrive_time} · {t.vehicle} · {seats} · {price}")
+            lines.append("")
+            lines.append(f"• Date: {pretty_date(t.date)}")
+            lines.append(f"• Time: {t.depart_time} → {t.arrive_time}")
+            lines.append(f"• Bus Type: {_bus_type(t)}")
+            lines.append(f"• Remaining Seats: {seats}")
+            lines.append(f"• Price: {price}")
         lines.append("")
 
     return "\n".join(lines).strip()

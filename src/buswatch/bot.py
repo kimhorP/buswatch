@@ -22,7 +22,7 @@ from buswatch.db import Database
 from buswatch.models import Direction, NormalizedTrip, classify_vehicle
 from buswatch.sources import ALL_SOURCES
 from buswatch.sources.base import SourceError
-from buswatch.watcher import watcher_loop
+from buswatch.watcher import pretty_date, watcher_loop
 from buswatch.web import serve as web_serve
 
 log = logging.getLogger("buswatch.bot")
@@ -363,12 +363,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if t.seats_available == 0
             else f"{t.seats_available} / {t.seats_total or '?'}"
         )
+        bus_type = classify_vehicle(t.vehicle)
         await query.edit_message_text(
-            f"<b>{t.company}</b> · {t.date}\n"
-            f"{t.depart_time} → {t.arrive_time}\n"
-            f"{t.vehicle}\n"
-            f"Seats: {seats}\n"
-            f"Price: {t.price:g} {t.currency}",
+            f"<b>{t.company}</b>\n\n"
+            f"• Date: {pretty_date(t.date)}\n"
+            f"• Time: {t.depart_time} → {t.arrive_time}\n"
+            f"• Bus Type: {bus_type}\n"
+            f"• Remaining Seats: {seats}\n"
+            f"• Price: {t.price:g} {t.currency}",
             parse_mode="HTML",
         )
         return
