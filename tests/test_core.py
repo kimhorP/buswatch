@@ -54,35 +54,35 @@ def test_trip_key():
 
 
 def test_next_poll_time_before_first_slot():
-    # 08:00 Phnom Penh -> today 09:00
+    # 08:00 Phnom Penh -> today 08:15
     now = datetime(2026, 10, 22, 8, 0, tzinfo=TZ)
     nxt = _next_poll_time(now)
-    assert (nxt.hour, nxt.minute) == (9, 0)
+    assert (nxt.hour, nxt.minute) == (8, 15)
     assert nxt.day == 22
 
 
 def test_next_poll_time_between_slots():
-    # 10:00 -> next hour 11:00
-    now = datetime(2026, 10, 22, 10, 0, tzinfo=TZ)
+    # 10:07 -> next quarter-hour slot 10:15
+    now = datetime(2026, 10, 22, 10, 7, tzinfo=TZ)
     nxt = _next_poll_time(now)
-    assert (nxt.hour, nxt.minute) == (11, 0)
+    assert (nxt.hour, nxt.minute) == (10, 15)
     assert nxt.day == 22
 
 
 def test_next_poll_time_after_last_slot():
-    # 23:00 -> next hour 00:00 next day
-    now = datetime(2026, 10, 22, 23, 0, tzinfo=TZ)
+    # 23:52 -> 00:00 next day
+    now = datetime(2026, 10, 22, 23, 52, tzinfo=TZ)
     nxt = _next_poll_time(now)
     assert nxt.day == 23
     assert (nxt.hour, nxt.minute) == (0, 0)
 
 
 def test_next_poll_time_uses_phnom_penh_tz():
-    # 17:00 UTC = 00:00 next day Phnom Penh (UTC+7) -> 01:00
+    # 17:00 UTC = 00:00 next day Phnom Penh (UTC+7) -> 00:15
     now = datetime(2026, 10, 22, 17, 0, tzinfo=ZoneInfo("UTC"))
     nxt = _next_poll_time(now)
     assert nxt.tzinfo == TZ
-    assert (nxt.day, nxt.hour, nxt.minute) == (23, 1, 0)
+    assert (nxt.day, nxt.hour, nxt.minute) == (23, 0, 15)
 
 
 def _trip(seats: int, company: str = "Larryta", depart: str = "06:00") -> NormalizedTrip:

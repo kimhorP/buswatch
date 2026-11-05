@@ -1,4 +1,4 @@
-"""Background watcher: polls sources hourly, detects threshold transitions."""
+"""Background watcher: polls sources on a fixed interval, detects threshold transitions."""
 
 from __future__ import annotations
 
@@ -18,9 +18,12 @@ log = logging.getLogger("buswatch.watcher")
 
 
 def _next_poll_time(now: datetime) -> datetime:
-    """Next hourly poll datetime after `now`, in Asia/Phnom_Penh."""
+    """Next poll slot strictly after `now`, aligned to POLL_INTERVAL, in Asia/Phnom_Penh."""
     local = now.astimezone(TZ)
-    return local.replace(minute=0, second=0, microsecond=0) + POLL_INTERVAL
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    interval = POLL_INTERVAL.total_seconds()
+    elapsed = (local - midnight).total_seconds()
+    return midnight + timedelta(seconds=(int(elapsed // interval) + 1) * interval)
 
 
 async def _fetch_day(

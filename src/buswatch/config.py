@@ -13,7 +13,7 @@ load_dotenv()
 # --- Fixed product decisions (see docs/system-design.md) ---
 
 THRESHOLD = 7  # alert when seats drop to this or below
-POLL_INTERVAL = timedelta(hours=1)  # poll every hour
+POLL_INTERVAL = timedelta(minutes=15)  # poll every 15 minutes
 TZ = ZoneInfo("Asia/Phnom_Penh")
 
 # --- Environment-backed ---

@@ -49,6 +49,16 @@ def _format_user_date(d: date) -> str:
     return d.strftime("%d-%m-%y")
 
 
+def poll_interval_label() -> str:
+    """Human-readable POLL_INTERVAL, e.g. '15m' or '1h'."""
+    total_minutes = int(POLL_INTERVAL.total_seconds() // 60)
+    if total_minutes % 60 == 0:
+        return f"{total_minutes // 60}h"
+    if total_minutes < 60:
+        return f"{total_minutes}m"
+    return f"{total_minutes // 60}h {total_minutes % 60}m"
+
+
 def _direction_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -312,12 +322,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             direction = wstate["direction"]
             await db.set_direction(chat_id, direction, day.isoformat(), company_name)
             _watch_state.pop(chat_id, None)
-            interval_hours = int(POLL_INTERVAL.total_seconds() // 3600)
             watch_company = f"{company_name or 'all companies'} "
             await query.edit_message_text(
                 f"✅ Watching <b>{watch_company}{direction.label}</b> "
                 f"on {_format_user_date(day)}.\n"
-                f"Alerts at ≤{THRESHOLD} seats, polled every {interval_hours}h "
+                f"Alerts at ≤{THRESHOLD} seats, polled every {poll_interval_label()} "
                 "(Phnom Penh time).",
                 parse_mode="HTML",
             )
