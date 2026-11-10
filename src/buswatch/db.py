@@ -10,7 +10,8 @@ from buswatch.models import Direction, NormalizedTrip
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
-    chat_id       INTEGER PRIMARY KEY,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id       INTEGER NOT NULL,
     direction     TEXT NOT NULL,
     company       TEXT,
     watch_date    TEXT,
@@ -62,12 +63,26 @@ class Database:
         self._conn = await aiosqlite.connect(self._path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(_SCHEMA)
-        # migrate pre-watch_date databases
+        # 1) Add missing columns to an older settings table (do this before the
+        #    id rebuild below, which copies those columns across).
         async with self.conn.execute("PRAGMA table_info(settings)") as cur:
             cols = {row["name"] for row in await cur.fetchall()}
         for col in ("watch_date", "company"):
             if col not in cols:
                 await self.conn.execute(f"ALTER TABLE settings ADD COLUMN {col} TEXT")
+        # 2) Migrate pre-id databases: chat_id was PRIMARY KEY, now id is AUTOINCREMENT.
+        async with self.conn.execute("PRAGMA table_info(settings)") as cur:
+            cols = {row["name"] for row in await cur.fetchall()}
+        if "id" not in cols:
+            await self.conn.execute("ALTER TABLE settings RENAME TO settings_old")
+            await self._conn.executescript(_SCHEMA)
+            await self.conn.execute(
+                """
+                INSERT INTO settings (chat_id, direction, company, watch_date, updated_at)
+                SELECT chat_id, direction, company, watch_date, updated_at FROM settings_old
+                """
+            )
+            await self.conn.execute("DROP TABLE settings_old")
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -83,41 +98,63 @@ class Database:
 
     # --- settings ---
 
-    async def get_direction(self, chat_id: int) -> Direction | None:
+    async def get_watches(self, chat_id: int) -> list[dict]:
+        """All watches for a chat, each with id, direction, watch_date, company."""
         async with self.conn.execute(
-            "SELECT direction FROM settings WHERE chat_id = ?", (chat_id,)
+            "SELECT id, direction, watch_date, company FROM settings WHERE chat_id = ? ORDER BY id",
+            (chat_id,),
         ) as cur:
-            row = await cur.fetchone()
-        return Direction(row["direction"]) if row else None
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
 
-    async def set_direction(
+    async def add_watch(
         self,
         chat_id: int,
         direction: Direction,
         watch_date: str | None = None,
         company: str | None = None,
-    ) -> None:
-        """Upsert a user's watch. watch_date is ISO (YYYY-MM-DD) or None (today+tomorrow).
-        company is None to watch all companies, else a company name."""
-        await self.conn.execute(
+    ) -> int:
+        """Insert a new watch. Returns the new row id."""
+        cur = await self.conn.execute(
             """
             INSERT INTO settings (chat_id, direction, company, watch_date, updated_at)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE
-                SET direction = excluded.direction,
-                    company = excluded.company,
-                    watch_date = excluded.watch_date,
-                    updated_at = excluded.updated_at
             """,
             (chat_id, direction.value, company, watch_date, _now_iso()),
         )
         await self.conn.commit()
+        if cur.lastrowid is None:
+            raise RuntimeError("add_watch: no row inserted")
+        return cur.lastrowid
 
-    async def delete_direction(self, chat_id: int) -> bool:
-        """Remove a user's watch. Returns True if a row was deleted."""
+    async def delete_watch(self, watch_id: int) -> bool:
+        """Delete a specific watch by id. Returns True if a row was deleted."""
+        cur = await self.conn.execute("DELETE FROM settings WHERE id = ?", (watch_id,))
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def delete_all_watches(self, chat_id: int) -> bool:
+        """Remove all of a user's watches. Returns True if any row was deleted."""
         cur = await self.conn.execute("DELETE FROM settings WHERE chat_id = ?", (chat_id,))
         await self.conn.commit()
         return cur.rowcount > 0
+
+    async def get_last_alert_time(
+        self, chat_id: int, trip_key: tuple[str, str, str, str, str]
+    ) -> str | None:
+        """Most recent polled_at where alerted=1 for a trip key, or None."""
+        company, day, direction, depart_time, vehicle = trip_key
+        async with self.conn.execute(
+            """
+            SELECT polled_at FROM seat_history
+            WHERE chat_id = ? AND company = ? AND date = ?
+              AND direction = ? AND depart_time = ? AND vehicle = ? AND alerted = 1
+            ORDER BY polled_at DESC LIMIT 1
+            """,
+            (chat_id, company, day, direction, depart_time, vehicle),
+        ) as cur:
+            row = await cur.fetchone()
+        return row["polled_at"] if row else None
 
     # --- users ---
 
@@ -148,14 +185,20 @@ class Database:
             rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
-    async def get_all_watchers(self) -> list[tuple[int, Direction, str | None, str | None]]:
-        """All (chat_id, direction, watch_date, company) rows that have opted in to watching."""
+    async def get_all_watches(self) -> list[tuple[int, int, Direction, str | None, str | None]]:
+        """All (id, chat_id, direction, watch_date, company) rows that have opted in to watching."""
         async with self.conn.execute(
-            "SELECT chat_id, direction, watch_date, company FROM settings"
+            "SELECT id, chat_id, direction, watch_date, company FROM settings ORDER BY id"
         ) as cur:
             rows = await cur.fetchall()
         return [
-            (row["chat_id"], Direction(row["direction"]), row["watch_date"], row["company"])
+            (
+                row["id"],
+                row["chat_id"],
+                Direction(row["direction"]),
+                row["watch_date"],
+                row["company"],
+            )
             for row in rows
         ]
 

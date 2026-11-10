@@ -14,6 +14,7 @@ load_dotenv()
 
 THRESHOLD = 7  # alert when seats drop to this or below
 POLL_INTERVAL = timedelta(minutes=15)  # poll every 15 minutes
+REALERT_INTERVAL = timedelta(hours=6)  # re-alert every 6 hours while seats ≤7
 TZ = ZoneInfo("Asia/Phnom_Penh")
 
 # --- Environment-backed ---

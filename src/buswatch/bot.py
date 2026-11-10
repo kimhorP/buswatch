@@ -219,15 +219,44 @@ async def cmd_unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if update.message and update.effective_chat:
         await _track_user(update, context)
         db: Database = context.bot_data["db"]
-        removed = await db.delete_direction(update.effective_chat.id)
-        if removed:
-            await update.message.reply_text(
-                "🛑 Stopped watching. You won't get seat alerts anymore.\n"
-                "Run /watch to start again."
-            )
-        else:
+        chat_id = update.effective_chat.id
+        watches = await db.get_watches(chat_id)
+        if not watches:
             await update.message.reply_text(
                 "You're not watching anything right now. Run /watch to set a direction."
+            )
+            return
+        if len(watches) == 1:
+            removed = await db.delete_watch(watches[0]["id"])
+            if removed:
+                await update.message.reply_text(
+                    "🛑 Stopped watching. You won't get seat alerts anymore.\n"
+                    "Run /watch to start again."
+                )
+            else:
+                await update.message.reply_text(
+                    "Couldn't remove that watch. Try again."
+                )
+        else:
+            direction_labels = {
+                "PP_SR": "Phnom Penh → Siem Reap",
+                "SR_PP": "Siem Reap → Phnom Penh",
+            }
+            buttons = []
+            for w in watches:
+                direction = w["direction"]
+                date_str = w["watch_date"] or "today+tomorrow"
+                company = w["company"] or "all"
+                label = direction_labels.get(direction, direction)
+                buttons.append(
+                    [InlineKeyboardButton(
+                        f"❌ {label} · {date_str} · {company}",
+                        callback_data=f"unwatch:{w['id']}",
+                    )]
+                )
+            await update.message.reply_text(
+                "Which watch do you want to stop?",
+                reply_markup=InlineKeyboardMarkup(buttons),
             )
 
 
@@ -260,6 +289,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         else:
             await query.edit_message_text("Expired — run /watch or /check again.")
+        return
+
+    if data.startswith("unwatch:"):
+        watch_id = int(data.split(":", 1)[1])
+        db: Database = context.bot_data["db"]
+        removed = await db.delete_watch(watch_id)
+        if removed:
+            await query.edit_message_text("🛑 Stopped watching that direction.")
+        else:
+            await query.edit_message_text("Watch not found — it may have already been removed.")
         return
 
     if data.startswith("co:"):
@@ -320,20 +359,20 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             db: Database = context.bot_data["db"]
             day = wstate["date"]
             direction = wstate["direction"]
-            await db.set_direction(chat_id, direction, day.isoformat(), company_name)
+            watch_id = await db.add_watch(chat_id, direction, day.isoformat(), company_name)
             _watch_state.pop(chat_id, None)
             watch_company = f"{company_name or 'all companies'} "
             await query.edit_message_text(
                 f"✅ Watching <b>{watch_company}{direction.label}</b> "
                 f"on {_format_user_date(day)}.\n"
                 f"Alerts at ≤{THRESHOLD} seats, polled every {poll_interval_label()} "
-                "(Phnom Penh time).",
+                f"(Phnom Penh time).",
                 parse_mode="HTML",
             )
             return
         else:
             await query.edit_message_text("Expired — run /watch or /check again.")
-        return
+            return
 
     if data.startswith("veh:"):
         group = data.split(":", 1)[1]

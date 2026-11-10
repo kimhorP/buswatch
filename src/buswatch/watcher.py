@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 import httpx
 
-from buswatch.config import POLL_INTERVAL, THRESHOLD, TZ
+from buswatch.config import POLL_INTERVAL, REALERT_INTERVAL, THRESHOLD, TZ
 from buswatch.db import Database
 from buswatch.models import Direction, NormalizedTrip, classify_vehicle
 from buswatch.sources import ALL_SOURCES
@@ -44,15 +44,28 @@ async def _fetch_day(
 async def _low_trips_for_user(
     db: Database, chat_id: int, trips: list[NormalizedTrip]
 ) -> list[NormalizedTrip]:
-    """Detect threshold crossings for one user and persist their history."""
+    """Detect low seats for one user and persist their history; re-alerts every 6h."""
+    from datetime import UTC
+
     low: list[NormalizedTrip] = []
     history_rows: list[tuple[NormalizedTrip, bool]] = []
+    now = datetime.now(UTC)
 
     for trip in trips:
         prev = await db.latest_seat_count(chat_id, trip.key)
-        should_alert = trip.seats_available <= THRESHOLD and (
-            prev is None or (prev[0] > THRESHOLD and not prev[1])
-        )
+        last_alert = await db.get_last_alert_time(chat_id, trip.key)
+
+        should_alert = False
+        if trip.seats_available <= THRESHOLD:
+            if prev is None:
+                should_alert = True  # first sighting, already low
+            elif prev[0] > THRESHOLD and not prev[1]:
+                should_alert = True  # transitioned from above threshold into low
+            elif last_alert is not None:
+                last_dt = datetime.fromisoformat(last_alert)
+                if (now - last_dt) >= REALERT_INTERVAL:
+                    should_alert = True  # re-alert after interval while still low
+
         history_rows.append((trip, should_alert))
         if should_alert:
             low.append(trip)
@@ -63,23 +76,27 @@ async def _low_trips_for_user(
 
 async def poll_once(db: Database, http: httpx.AsyncClient) -> dict[int, list[NormalizedTrip]]:
     """Poll every watched direction/date once; return {chat_id: low_seat_trips}."""
-    watchers = await db.get_all_watchers()
+    watchers = await db.get_all_watches()
     if not watchers:
         return {}
 
     # Resolve each user's days: their watch_date, or today+tomorrow if unset.
     today = datetime.now(TZ).date()
-    user_days: dict[int, tuple[Direction, list[date], str | None]] = {}
-    for chat_id, direction, watch_date, company in watchers:
+    # Multiple watches per user -> user_days[chat_id] = list of (direction, days, company)
+    user_days: dict[int, list[tuple[Direction, list[date], str | None]]] = {}
+    for _watch_id, chat_id, direction, watch_date, company in watchers:
         if watch_date:
             days = [date.fromisoformat(watch_date)]
         else:
             days = [today, today + timedelta(days=1)]
-        user_days[chat_id] = (direction, days, company)
+        user_days.setdefault(chat_id, []).append((direction, days, company))
 
     # Fetch once per distinct (direction, day, company), shared across users.
     needed = {
-        (direction, day, company) for direction, days, company in user_days.values() for day in days
+        (direction, day, company)
+        for chat_id_days in user_days.values()
+        for direction, days, company in chat_id_days
+        for day in days
     }
     fetched: dict[tuple[Direction, date, str | None], list[NormalizedTrip]] = {}
     for direction, day, company in needed:
@@ -87,9 +104,13 @@ async def poll_once(db: Database, http: httpx.AsyncClient) -> dict[int, list[Nor
 
     # Evaluate + record history per user, against that user's own history.
     alerts: dict[int, list[NormalizedTrip]] = {}
-    for chat_id, (direction, days, company) in user_days.items():
-        trips = [t for day in days for t in fetched.get((direction, day, company), [])]
-        low = await _low_trips_for_user(db, chat_id, trips)
+    for chat_id, watches in user_days.items():
+        # Collect all trips across this user's watches
+        all_trips: list[NormalizedTrip] = []
+        for direction, days, company in watches:
+            trips = [t for day in days for t in fetched.get((direction, day, company), [])]
+            all_trips.extend(trips)
+        low = await _low_trips_for_user(db, chat_id, all_trips)
         if low:
             alerts[chat_id] = low
     return alerts
@@ -144,8 +165,12 @@ async def watcher_loop(db: Database, send_alert) -> None:
 
             try:
                 # direction per user, for message formatting
-                watchers = await db.get_all_watchers()
-                dir_by_chat = {chat_id: direction for chat_id, direction, _, _ in watchers}
+                watchers = await db.get_all_watches()
+                # a chat can have multiple watches; show the first one's direction
+                dir_by_chat = {}
+                for _, chat_id, direction, _, _ in watchers:
+                    if chat_id not in dir_by_chat:
+                        dir_by_chat[chat_id] = direction
 
                 alerts = await poll_once(db, http)
                 total = sum(len(v) for v in alerts.values())
