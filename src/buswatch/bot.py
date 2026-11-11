@@ -104,13 +104,13 @@ def _greeting(name: str) -> str:
 
 def _info_text() -> str:
     return (
+        "I am a bot that helps track bus tickets between Phnom Penh and Siem Reap.\n"
+        "I alert you when seats are low.\n\n"
         "Available commands:\n"
-        f"/watch [dd-mm-yy]: watch a date + direction + company for low seats "
-        f"(alerts at ≤{THRESHOLD} seats)\n"
+        "/watch [dd-mm-yy]: watch a date + direction + company for low seats\n"
         "/unwatch: stop receiving alerts\n"
-        f"/check [dd-mm-yy]: instant seat availability lookup\n\n"
-        f"Date format: {_DATE_HINT}\n"
-        "Omit the date and I'll ask for it."
+        "/check [dd-mm-yy]: instant seat availability lookup\n\n"
+        f"Date format: {_DATE_HINT} (example: 16-11-26)"
     )
 
 
